@@ -1,0 +1,209 @@
+deals = zoho.crm.getRecordById("Deals",projet_id);
+user_id = deals.get("Utilisateur_pour_ouverture_de_stage").get("id");
+user_crm = zoho.crm.getRecordById("users",user_id);
+user_email_crm = user_crm.get("users").get(0).get("email");
+// Définir l'URL de l'API
+url_users = "https://meeting.zoho.eu/api/v2/20081686898/user";
+// Effectuer la requête GET pour récupérer la liste des utilisateurs
+temp_map = Map();
+response = invokeurl
+[
+	url :url_users
+	type :GET
+	parameters:temp_map.toString()
+	connection:"zoho_meeting"
+];
+// Vérifier si la réponse est valide
+if(response.get("representation") != null)
+{
+	// Si les utilisateurs sont présents dans la réponse, les traiter
+	users_list = response.get("representation");
+	// Afficher la liste des utilisateurs
+	for each  user in users_list
+	{
+		user_email_meeting = user.get("emailId");
+		if(user_email_meeting == user_email_crm)
+		{
+			user_zuid = user.get("zuid");
+			//info "Nom de l'utilisateur : " + user_zuid + " | Email : " + user_email_meeting;
+		}
+	}
+}
+else
+{
+	// Afficher l'erreur si la réponse ne contient pas de données
+	info "Erreur lors de la récupération des utilisateurs de zoho meeting : " + response.toString();
+}
+if(user_zuid != null)
+{
+	part_dev = zoho.crm.getRecordById("Contacts",deals.get("Partenaire_D_veloppement").get("id"));
+	contact = zoho.crm.getRecordById("Contacts",deals.get("Contact_Name").get("id"));
+	stagiaire = zoho.crm.getRecordById("Stagiaires",deals.get("Stagiaire_D_veloppeur").get("id"));
+	// mapping de réunion sur zoho meeting
+	url_meeting = "https://meeting.zoho.eu/api/v2/20081686898/sessions.json";
+	session = Map();
+	session.put("topic","Réunion pour le Projet Ardan: " + deals.get("Deal_Name"));
+	session.put("agenda","Discussion sur le Projet Ardan: " + deals.get("Deal_Name"));
+	session.put("presenter",user_zuid.toLong());
+	date_var = deals.get("Date_Heure_OS").toDateTime().toString("MMM dd, yyyy");
+	time = deals.get("Date_Heure_OS").getSuffix("T");
+	hours = time.subText(0,2);
+	minutes = time.subText(3,5);
+	input_time = hours + ":" + minutes;
+	// Convertir l'heure au format "HH:mm" en un objet date/heure
+	time_obj = input_time.toDateTime("HH:mm");
+	// Convertir l'heure au format 12 heures
+	hours_converted = time_obj.toString("hh:mm a");
+	start_time = date_var + " " + hours_converted;
+	info "start_time : " + start_time;
+	session.put("startTime",start_time);
+	session.put("duration",2700000);
+	session.put("timezone","Europe/Paris");
+	particip_meeting = list();
+	// invitation part dev
+	email_map = Map();
+	email_map.put("email",part_dev.get("Email"));
+	particip_meeting.add(email_map);
+	// invitation contact
+	email_map = Map();
+	email_map.put("email",contact.get("Email"));
+	particip_meeting.add(email_map);
+	// invitation stagiaire
+	email_map = Map();
+	email_map.put("email",stagiaire.get("Email"));
+	particip_meeting.add(email_map);
+	session.put("participants",particip_meeting);
+	param_meeting = Map();
+	param_meeting.put("session",session);
+	info "param_meeting : " + param_meeting;
+	// Mapping les détails de la réunion
+	event_data = Map();
+	event_data.put("Subject","Réunion pour le Projet Ardan: " + deals.get("Deal_Name"));
+	event_data.put("Event_Title","Réunion pour le Projet Ardan: " + deals.get("Deal_Name"));
+	event_data.put("Start_DateTime",deals.get("Date_Heure_OS"));
+	modif = deals.get("Date_Heure_OS").replaceAll("T"," ").addMinutes(45);
+	event_data.put("End_DateTime",modif.toString("yyyy-MM-dd'T'HH:mm:ss"));
+	event_data.put("$se_module","Deals");
+	event_data.put("What_Id",deals.get("id"));
+	//event_data.put("Owner", 9876543210);  // ID du propriétaire de l'événement (facultatif)
+	event_data.put("Location","A distance");
+	event_data.put("Description","Discussion sur le Projet Ardan: " + deals.get("Deal_Name"));
+	// Définir les participants (Attendees)
+	attendees = list();
+	contactMap = Map();
+	contactMap.put("invited","true");
+	contactMap.put("type","contact");
+	contactMap.put("email",part_dev.get("Email"));
+	contactMap.put("participant",part_dev.get("id").toLong());
+	contactMap.put("permission","3");
+	attendees.add(contactMap);
+	// 3eme contact à ajouter pour envoi d'invitation
+	contactMap = Map();
+	contactMap.put("invited","true");
+	contactMap.put("type","contact");
+	contactMap.put("email",contact.get("Email"));
+	contactMap.put("participant",contact.get("id").toLong());
+	contactMap.put("permission","3");
+	attendees.add(contactMap);
+	contactMap = Map();
+	contactMap.put("invited","true");
+	contactMap.put("type","email");
+	contactMap.put("participant",stagiaire.get("Email"));
+	attendees.add(contactMap);
+	// utilisateur
+	contactMap = Map();
+	contactMap.put("invited","true");
+	contactMap.put("type","user");
+	contactMap.put("email",user_email_crm);
+	contactMap.put("participant",user_id.toLong());
+	attendees.add(contactMap);
+	event_data.put("Participants",attendees);
+	info "event : " + event_data;
+	//vérification si création ou maj des réunion
+	id_reunion_crm = deals.get("ID_RDV_OS_CRM");
+	reunion_crm = zoho.crm.getRecordById("Events",id_reunion_crm);
+	info "reunion_crm : " + reunion_crm;
+	id_reunion_meeting = deals.get("ID_RDV_OS_MEETING");
+	url_existing_meeting = "https://meeting.zoho.eu/api/v2/20081686898/sessions/" + id_reunion_meeting + ".json";
+	reunion_meeting = invokeurl
+	[
+		url :url_existing_meeting
+		type :GET
+		connection:"zoho_meeting"
+	];
+	info "reunion_meeting : " + reunion_meeting;
+	if(id_reunion_meeting != null && reunion_meeting.get("session") != null)
+	{
+		info "Mise à jour des réunions";
+		// maj de réunion sur zoho meeting
+		meeting_maj = invokeurl
+		[
+			url :url_existing_meeting
+			type :PUT
+			parameters:param_meeting.toString()
+			connection:"zoho_meeting"
+		];
+		info "maj_meeting : " + meeting_maj;
+		// Ajout du lien d'invitation
+		event_data.put("Lien_Zoho_Meeting",meeting_maj.get("session").get("joinLink"));
+		// maj de l'événement avec les participants
+		maj_event = zoho.crm.updateRecord("Events",id_reunion_crm,event_data);
+		info "maj_event : " + maj_event;
+		// Vérifier si l'événement a été créé avec succès
+		if(maj_event.get("id") != null)
+		{
+			new_id_reunion_crm = maj_event.get("id");
+			new_id_reunion_meeting = meeting_maj.get("session").get("meetingKey");
+			maj_deal_map = Map();
+			maj_deal_map.put("ID_RDV_OS_CRM",new_id_reunion_crm);
+			maj_deal_map.put("ID_RDV_OS_MEETING",new_id_reunion_meeting);
+			info "maj du projet : " + zoho.crm.updateRecord("Deals",projet_id,maj_deal_map);
+		}
+		else
+		{
+			info "Une erreur dans la maj de la réunion crm est survenue : " + maj_event;
+		}
+	}
+	else
+	{
+		info "Création des réunions";
+		// création de réunion sur zoho meeting
+		meeting_creation = invokeurl
+		[
+			url :url_meeting
+			type :POST
+			parameters:param_meeting.toString()
+			connection:"zoho_meeting"
+		];
+		info "meeting : " + meeting_creation;
+		if(meeting_creation.get("session") != null)
+		{
+			// Ajout du lien d'invitation
+			event_data.put("Lien_Zoho_Meeting",meeting_creation.get("session").get("joinLink"));
+			// Créer l'événement avec les participants
+			create_event = zoho.crm.createRecord("Events",event_data);
+			// Vérifier si l'événement a été créé avec succès
+			if(create_event.get("id") != null)
+			{
+				new_id_reunion_crm = create_event.get("id");
+				new_id_reunion_meeting = meeting_creation.get("session").get("meetingKey");
+				maj_deal_map = Map();
+				maj_deal_map.put("ID_RDV_OS_CRM",new_id_reunion_crm);
+				maj_deal_map.put("ID_RDV_OS_MEETING",new_id_reunion_meeting);
+				info "maj du projet : " + zoho.crm.updateRecord("Deals",projet_id,maj_deal_map);
+			}
+			else
+			{
+				info "Une erreur dans la création de la réunion crm est survenue : " + create_event;
+			}
+		}
+		else
+		{
+			info "Une erreur dans la création du meeting est survenue : " + meeting_creation;
+		}
+	}
+}
+else
+{
+	info "Erreur lors de la récupération de l'utilisateur pour ouverture de stage " + user_email_crm + " qui ne se trouve pas sur Zoho Meeting.";
+}
