@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Widget Scan Audio Creator</title>
+    <script src="https://js.zohostatic.com/creator/widgets/version/1.0/widgetsdk-min.js"></script>
+    <style>
+        body { 
+            font-family: 'Segoe UI', sans-serif; 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            height: 100vh; 
+            background-color: #f8fafc; 
+            margin: 0; 
+        }
+        .container { 
+            background: #fff; 
+            padding: 30px; 
+            border-radius: 8px; 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1); 
+            text-align: center; 
+            width: 350px; 
+        }
+        input { 
+            width: 100%; 
+            padding: 12px; 
+            margin: 15px 0; 
+            border: 2px solid #cbd5e1; 
+            border-radius: 6px; 
+            box-sizing: border-box; 
+            font-size: 16px; 
+            outline: none;
+        }
+        input:focus {
+            border-color: #3b82f6;
+        }
+        button { 
+            width: 100%; 
+            padding: 12px; 
+            background: #3b82f6; 
+            color: white; 
+            border: none; 
+            border-radius: 6px; 
+            cursor: pointer; 
+            font-size: 16px; 
+            font-weight: bold; 
+            transition: 0.2s;
+        }
+        button:hover { 
+            background: #2563eb; 
+        }
+        #message { 
+            margin-top: 20px; 
+            font-weight: bold; 
+            font-size: 16px; 
+            min-height: 24px; 
+            padding: 10px;
+            border-radius: 6px;
+        }
+        .success { color: #16a34a; background-color: #dcfce7; }
+        .error { color: #dc2626; background-color: #fee2e2; }
+        .loading { color: #d97706; background-color: #fef3c7; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Test de Validation</h2>
+        <p style="color: #64748b; font-size: 14px; margin-top: -10px;">Sélectionnez ou tapez un code.</p>
+        
+        <input type="text" id="scanInput" list="couponsList" placeholder="Entrez ou choisissez le code..." autofocus>
+        <datalist id="couponsList">
+            </datalist>
+
+        <button onclick="checkCode()">Valider le code</button>
+        
+        <div id="message"></div>
+    </div>
+
+    <script>
+        // GESTION DU SON (Web Audio API)
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+        function playSound(resultType) {
+            if (audioCtx.state === 'suspended') { audioCtx.resume(); }
+
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            if (resultType === 'success') {
+                // Son aigu et court (Bip)
+                oscillator.type = 'sine';
+                oscillator.frequency.setValueAtTime(1000, audioCtx.currentTime); 
+                gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                oscillator.start();
+                oscillator.stop(audioCtx.currentTime + 0.15);
+            } else {
+                // Son grave et plus long (Buzz)
+                oscillator.type = 'sawtooth';
+                oscillator.frequency.setValueAtTime(150, audioCtx.currentTime); 
+                gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                oscillator.start();
+                oscillator.stop(audioCtx.currentTime + 0.4);
+            }
+        }
+
+        // FETCH DES DONNÉES 
+        function loadCoupons() {
+            const datalist = document.getElementById('couponsList');
+            
+            var config = {
+                reportName : "Coupon_Report", 
+                pageSize : 200 
+            };
+
+            ZOHO.CREATOR.API.getAllRecords(config).then(function(response) {
+
+                console.log("Réponse de Zoho pour le scan :", response);
+
+                if (response.code === 3000 && response.data.length > 0) {
+                    response.data.forEach(function(record) {
+                        let option = document.createElement('option');
+                        option.value = record.Code_du_coupon;
+                        option.textContent = record.Nom_de_l_offre; 
+                        datalist.appendChild(option);
+                    });
+                    console.log("Suggestions de coupons chargées depuis Creator.");
+                }
+            }).catch(function(err) {
+                console.error("Erreur lors du chargement des suggestions :", err);
+            });
+        }
+
+        // VALIDATION DU CODE
+        function checkCode() {
+            const inputElement = document.getElementById('scanInput');
+            const messageElement = document.getElementById('message');
+            const code = inputElement.value.trim();
+
+            if (code === '') return;
+
+            messageElement.textContent = '⏳ Vérification en cours...';
+            messageElement.className = 'loading';
+
+            var config = {
+                reportName : "Coupon_Report",
+                criteria : `(Code_du_coupon == ${code})`
+            };
+
+            ZOHO.CREATOR.API.getAllRecords(config).then(function(response) {
+                if (response.code === 3000 && response.data.length > 0) {
+                    const coupon = response.data[0];
+                    playSound('success');
+                    messageElement.textContent = `✅ Valide : ${coupon.Nom_de_l_offre}`;
+                    messageElement.className = 'success';
+                } else {
+                    playSound('error');
+                    messageElement.textContent = '❌ Code invalide ou inconnu.';
+                    messageElement.className = 'error';
+                }
+            }).catch(function(err) {
+                playSound('error');
+                messageElement.textContent = '❌ Code invalide ou inconnu.';
+                messageElement.className = 'error';
+                console.log("Aucune donnée trouvée (ou erreur de syntaxe) :", err);
+            });
+
+            inputElement.value = '';
+            inputElement.focus();
+        }
+
+        document.getElementById('scanInput').addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') {
+                checkCode();
+            }
+        });
+
+        ZOHO.CREATOR.init().then(function(data) {
+            console.log("Widget Zoho Creator initialisé");
+            loadCoupons();
+        });
+    </script>
+</body>
+</html>

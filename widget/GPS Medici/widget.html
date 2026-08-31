@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <script src="https://live.zwidgets.com/js-sdk/1.5/ZohoEmbededAppSDK.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; margin: 0; padding: 15px; background: #f4f7f9; }
+        .header { display: flex; justify-content: flex-end; align-items: center; margin-bottom: 15px; }
+        .card { background: white; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); overflow: hidden; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th { background: #f8fafc; text-align: left; padding: 12px; border-bottom: 2px solid #eee; }
+        td { padding: 10px 12px; border-bottom: 1px solid #eee; vertical-align: middle; }
+        .subtask-row { background: #f9fbff; }
+        
+        .toggle-btn { 
+            background: #007bff; color: white; border: none; border-radius: 4px;
+            cursor: pointer; padding: 2px 8px; margin-right: 10px; font-weight: bold; font-size: 14px;
+        }
+        .task-link { color: #0066cc; text-decoration: none; font-weight: 600; cursor: pointer; }
+        .completed { text-decoration: line-through !important; color: #999 !important; }
+        
+        .editable-select {
+            padding: 4px; border: 1px solid #ddd; border-radius: 4px;
+            font-size: 12px; background: #fff; cursor: pointer; width: 100%;
+        }
+        .saving { opacity: 0.5; pointer-events: none; }
+        
+        .btn-create {
+            background: #1976d2; color: white; border: none; padding: 8px 15px;
+            border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 13px;
+        }
+
+        /* 1) Correction alignement progression */
+        .prog-cell {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100%;
+            min-height: 35px; /* Assure un alignement stable */
+        }
+
+        .progress-counter {
+            font-weight: bold; color: #555; background: #eee;
+            padding: 2px 8px; border-radius: 10px; font-size: 11px;
+            display: inline-block;
+        }
+        .progress-done { background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7; }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <button class="btn-create" onclick="createNewTask()">+ Nouvelle tâche</button>
+    </div>
+
+    <div class="card" id="container">
+        <div style="padding:40px; text-align:center;">Chargement...</div>
+    </div>
+
+    <script>
+        const TASK_MODULE = "T_ches_personnalis_es";
+        const LOOKUP_MAP = { "Accounts": "Famille", "Comptes": "Compte", "Contacts": "Client_Contact" };
+        
+        const FIELDS = {
+            NAME: "Name", STATUS: "Statut", PRIORITY: "Priorit", DATE: "Date_d_ch_ance",
+            REMINDER: "Rappel", SUBFORM: "Sous_t_ches", SF_LOOKUP: "T_ches"
+        };
+
+        const STATUS_OPTIONS = ["Non commencé", "En cours", "Terminé", "En attente", "Annulé"];
+        const PRIORITY_OPTIONS = ["Basse", "Moyenne", "Haute"];
+        const COMPLETED_VALS = ["Terminé", "Terminée", "Complété"];
+
+        let expandedParents = new Set();
+        let currentRecord = null;
+        let allTasks = [];
+
+        function formatFullDate(dateStr) {
+            if (!dateStr || dateStr === "-") return "-";
+            try {
+                const dateObj = new Date(dateStr);
+                if (isNaN(dateObj.getTime())) return dateStr;
+                const y = dateObj.getFullYear();
+                const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+                const d = String(dateObj.getDate()).padStart(2, '0');
+                const hh = String(dateObj.getHours()).padStart(2, '0');
+                const mm = String(dateObj.getMinutes()).padStart(2, '0');
+                return `${y}-${m}-${d} ${hh}:${mm}`;
+            } catch (e) { return dateStr; }
+        }
+
+        async function createNewTask() {
+            ZOHO.CRM.UI.Record.create({Entity: TASK_MODULE}).then(() => loadTasks());
+        }
+
+        async function updateFieldValue(taskId, fieldName, newValue) {
+            const rowElement = document.getElementById(`row-${taskId}`);
+            rowElement.classList.add('saving');
+            try {
+                await ZOHO.CRM.API.updateRecord({
+                    Entity: TASK_MODULE,
+                    APIData: { "id": taskId, [fieldName]: newValue }
+                });
+                await loadTasks(); 
+            } catch (e) {
+                alert("Erreur de sauvegarde.");
+                rowElement.classList.remove('saving');
+            }
+        }
+
+        async function loadTasks() {
+            if (!currentRecord) return;
+            const recordId = currentRecord.EntityId;
+            const lookupField = LOOKUP_MAP[currentRecord.Entity];
+
+            try {
+                const resp = await ZOHO.CRM.API.searchRecord({
+                    Entity: TASK_MODULE,
+                    Type: "criteria",
+                    Query: `(${lookupField}:equals:${recordId})`
+                });
+                
+                if (!resp.data) {
+                    document.getElementById("container").innerHTML = `<div style="padding:40px;text-align:center;">Aucune tâche.</div>`;
+                    return;
+                }
+
+                const detailedTasks = [];
+                for (let t of resp.data) {
+                    const fullRec = await ZOHO.CRM.API.getRecord({ Entity: TASK_MODULE, RecordID: t.id });
+                    if (fullRec.data) detailedTasks.push(Array.isArray(fullRec.data) ? fullRec.data[0] : fullRec.data);
+                }
+                allTasks = detailedTasks;
+                renderTable();
+            } catch (e) {
+                document.getElementById("container").innerHTML = `<div style="padding:40px;text-align:center;">Erreur de chargement.</div>`;
+            }
+        }
+
+        // 2) Fonction pour le décompte récursif des sous-tâches
+        function countProgress(task) {
+            let total = 0;
+            let done = 0;
+
+            const subform = task[FIELDS.SUBFORM] || [];
+            subform.forEach(row => {
+                const childId = String(row[FIELDS.SF_LOOKUP]?.id);
+                const child = allTasks.find(t => String(t.id) === childId);
+                
+                if (child) {
+                    total++; // On compte la sous-tâche
+                    if (COMPLETED_VALS.includes(child[FIELDS.STATUS])) {
+                        done++;
+                    }
+                    // Récursion : on descend dans les enfants de l'enfant
+                    const subRes = countProgress(child);
+                    total += subRes.total;
+                    done += subRes.done;
+                }
+            });
+
+            return { total, done };
+        }
+
+        function renderTable() {
+            const container = document.getElementById("container");
+            const childIds = new Set();
+            
+            allTasks.forEach(t => {
+                const sf = t[FIELDS.SUBFORM] || [];
+                sf.forEach(row => { if (row[FIELDS.SF_LOOKUP]?.id) childIds.add(String(row[FIELDS.SF_LOOKUP].id)); });
+            });
+
+            const roots = allTasks.filter(t => !childIds.has(String(t.id)));
+
+            let html = `<table><thead><tr><th>Objet</th><th style="text-align:center;">Progression</th><th>Priorité</th><th>Statut</th><th>Échéance</th></tr></thead><tbody>`;
+            roots.forEach(task => { html += generateRowHtml(task, 0); });
+            html += `</tbody></table>`;
+            container.innerHTML = html;
+        }
+
+        function generateRowHtml(task, level) {
+            const subform = task[FIELDS.SUBFORM] || [];
+            const hasChildren = subform.length > 0;
+            const isExpanded = expandedParents.has(String(task.id));
+            const currentStatus = task[FIELDS.STATUS] || "";
+            const currentPriority = task[FIELDS.PRIORITY] || "";
+            const isComp = COMPLETED_VALS.includes(currentStatus);
+
+            // Calcul récursif de la progression
+            let progressHtml = "";
+            if (hasChildren) {
+                const stats = countProgress(task);
+                const isFinished = stats.total > 0 && stats.done === stats.total;
+                progressHtml = `<div class="prog-cell">
+                    <span class="progress-counter ${isFinished ? 'progress-done' : ''}">${stats.done}/${stats.total}</span>
+                </div>`;
+            }
+
+            const prioritySelect = `
+                <select class="editable-select" onchange="updateFieldValue('${task.id}', '${FIELDS.PRIORITY}', this.value)">
+                    ${PRIORITY_OPTIONS.map(opt => `<option value="${opt}" ${opt === currentPriority ? 'selected' : ''}>${opt}</option>`).join('')}
+                </select>`;
+
+            const statusSelect = `
+                <select class="editable-select" onchange="updateFieldValue('${task.id}', '${FIELDS.STATUS}', this.value)">
+                    ${STATUS_OPTIONS.map(opt => `<option value="${opt}" ${opt === currentStatus ? 'selected' : ''}>${opt}</option>`).join('')}
+                </select>`;
+
+            let row = `
+                <tr id="row-${task.id}" class="${level > 0 ? 'subtask-row' : ''}">
+                    <td style="padding-left: ${level * 40 + 12}px">
+                        <div style="display:flex; align-items:center;">
+                            ${hasChildren ? `
+                                <button class="toggle-btn" onclick="toggle('${task.id}')">
+                                    ${isExpanded ? '−' : '+'}
+                                </button>` : `<span style="width:38px; display:inline-block; text-align:center; color:#ccc;">${level > 0 ? '└' : ''}</span>`}
+                            <a class="task-link ${isComp ? 'completed' : ''}" onclick="openRec('${task.id}')">
+                                ${task[FIELDS.NAME]}
+                            </a>
+                        </div>
+                    </td>
+                    <td>${progressHtml}</td>
+                    <td style="width: 100px;">${prioritySelect}</td>
+                    <td style="width: 120px;">${statusSelect}</td>
+                    <td>${formatFullDate(task[FIELDS.DATE])}</td>
+                </tr>
+            `;
+
+            if (isExpanded && hasChildren) {
+                subform.forEach(rowSF => {
+                    const subId = String(rowSF[FIELDS.SF_LOOKUP]?.id);
+                    const fullChild = allTasks.find(t => String(t.id) === subId);
+                    if (fullChild) row += generateRowHtml(fullChild, level + 1);
+                });
+            }
+            return row;
+        }
+
+        window.toggle = (id) => {
+            const sid = String(id);
+            if (expandedParents.has(sid)) expandedParents.delete(sid);
+            else expandedParents.add(sid);
+            renderTable();
+        };
+
+        window.openRec = (id) => { ZOHO.CRM.UI.Record.open({ Entity: TASK_MODULE, RecordID: id }); };
+
+        ZOHO.embeddedApp.on("PageLoad", function(data) {
+            currentRecord = data;
+            loadTasks();
+        });
+
+        ZOHO.embeddedApp.init().then(loadTasks);
+    </script>
+</body>
+</html>
