@@ -1,0 +1,45 @@
+string standalone.updateContactMainEnterpriseFromLink(Int linkingId)
+{
+triggersNoWorkflow = {"trigger":{"approval","blueprint","orchestration"}};
+// exclut workflow -> pas de boucle via Update/Create CxE
+linkingRecord = zoho.crm.getRecordById("Contacts_X_Enterprises",linkingId);
+contactRaw = linkingRecord.get("Contacts");
+enterpriseRaw = linkingRecord.get("Enterprises");
+if(contactRaw == null || enterpriseRaw == null)
+{
+	return "";
+}
+contactId = contactRaw.get("id");
+enterpriseId = enterpriseRaw.get("id");
+//
+contactRec = zoho.crm.getRecordById("Contacts",contactId.toLong());
+enterpriseRec = zoho.crm.getRecordById("Accounts",enterpriseId.toLong());
+//
+// --- SKIP self-account : ne pas écraser Account_Name par un compte portant le nom du contact ---
+enterpriseName = enterpriseRec.get("Account_Name");
+contactFullName = contactRec.get("Full_Name");
+if(enterpriseName != null && contactFullName != null)
+{
+	if(enterpriseName.trim().toLowerCase() == contactFullName.trim().toLowerCase())
+	{
+		return "";
+	}
+}
+//
+// --- GARDE ANTI-BOUCLE : n'écrire que si Account_Name change réellement ---
+currentAccount = contactRec.get("Account_Name");
+currentAccountId = null;
+if(currentAccount != null)
+{
+	currentAccountId = currentAccount.get("id");
+}
+if(currentAccountId == null || currentAccountId != enterpriseId)
+{
+	updateMap = Map();
+	updateMap.put("Account_Name",enterpriseId);
+	upd = zoho.crm.updateRecord("Contacts",contactId.toLong(),updateMap,triggersNoWorkflow);
+	// Account_Name n'est pas dans la section surveillée par AA - Sync Contact_Update -> on pousse Creator explicitement
+	syncRes = standalone.syncContact("Contacts",contactId.toLong());
+}
+return "";
+}
